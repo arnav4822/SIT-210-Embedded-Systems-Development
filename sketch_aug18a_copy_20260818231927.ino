@@ -1,150 +1,180 @@
-#include <Wire.h>
-#include <BH1750.h>
 #include <WiFiNINA.h>
-#include <ArduinoMqttClient.h>
+#include <PubSubClient.h>
 
-BH1750 lightSensor;
+// ---------- Wi-Fi ----------
+const char* ssid = "Anmol4G";
+const char* password = "Pineapple@11205";
 
-char ssid[] = "TT";
-char password[] = "12345678";
+// ---------- MQTT ----------
+const char* mqttServer = "broker.emqx.io";
+const int mqttPort = 1883;
 
-const char mqttServer[] =
-  "8abfc976a0b944208bac1582ad0cb531.s1.eu.hivemq.cloud";
+// Put your name here
+const char* myName = "Arnav";
 
-const int mqttPort = 8883;
+// ---------- Pins ----------
+const int trigPin = 2;
+const int echoPin = 3;
 
-const char mqttUsername[] = "arnav_mqtt";
-const char mqttPassword[] = "ArnaV@2006";
+const int bathroomLED = 12;
+const int hallwayLED = 11;
 
-const char mqttTopic[] = "arnav/sensors";
+WiFiClient wifiClient;
+PubSubClient mqttClient(wifiClient);
 
-WiFiSSLClient wifiClient;
-MqttClient mqttClient(wifiClient);
 
-void connectWiFi()
+// ---------- Ultrasonic distance ----------
+long getDistance()
 {
-  Serial.print("Connecting to Wi-Fi");
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(2);
 
-  while (WiFi.status() != WL_CONNECTED)
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+
+  long duration = pulseIn(echoPin, HIGH);
+
+  long distance = duration * 0.034 / 2;
+
+  return distance;
+}
+
+
+// ---------- MQTT message received ----------
+void mqttCallback(char* topic, byte* payload, unsigned int length)
+{
+  Serial.print("Message received on ");
+  Serial.print(topic);
+  Serial.print(": ");
+
+  for (int i = 0; i < length; i++)
   {
-    WiFi.begin(ssid, password);
-
-    delay(5000);
-
-    Serial.print(".");
+    Serial.print((char)payload[i]);
   }
 
   Serial.println();
-  Serial.println("Wi-Fi connected!");
 
-  Serial.print("IP address: ");
-  Serial.println(WiFi.localIP());
-}
-
-void connectMQTT()
-{
-  Serial.print("Connecting to HiveMQ");
-
-  mqttClient.setUsernamePassword(
-    mqttUsername,
-    mqttPassword
-  );
-
-  while (!mqttClient.connect(mqttServer, mqttPort))
+  // Wave -> turn both LEDs ON
+  if (strcmp(topic, "ES/Wave") == 0)
   {
-    Serial.print(".");
-    delay(5000);
+    digitalWrite(bathroomLED, HIGH);
+    digitalWrite(hallwayLED, HIGH);
   }
 
-  Serial.println();
-  Serial.println("Connected to HiveMQ!");
+  // Pat -> turn both LEDs OFF
+  if (strcmp(topic, "ES/Pat") == 0)
+  {
+    digitalWrite(bathroomLED, LOW);
+    digitalWrite(hallwayLED, LOW);
+  }
 }
 
+
+// ---------- MQTT connection ----------
+void reconnectMQTT()
+{
+  while (!mqttClient.connected())
+  {
+    Serial.print("Connecting to MQTT...");
+
+    String clientID = "ArduinoClient-";
+    clientID += String(random(0xffff), HEX);
+
+    if (mqttClient.connect(clientID.c_str()))
+    {
+      Serial.println("connected");
+
+      mqttClient.subscribe("ES/Wave");
+      mqttClient.subscribe("ES/Pat");
+
+      Serial.println("Subscribed to ES/Wave");
+      Serial.println("Subscribed to ES/Pat");
+    }
+    else
+    {
+      Serial.print("Failed, rc=");
+      Serial.println(mqttClient.state());
+
+      delay(5000);
+    }
+  }
+}
+
+
+// ---------- Setup ----------
 void setup()
 {
   Serial.begin(9600);
 
-  delay(2000);
+  pinMode(trigPin, OUTPUT);
+  pinMode(echoPin, INPUT);
 
-  Serial.println();
+  pinMode(bathroomLED, OUTPUT);
+  pinMode(hallwayLED, OUTPUT);
 
-  Serial.println("Light Sensor System Starting");
+  digitalWrite(bathroomLED, LOW);
+  digitalWrite(hallwayLED, LOW);
 
+  // Connect Wi-Fi
+  Serial.print("Connecting to Wi-Fi");
 
-  
-  Wire.begin();
-
-  Serial.println("I2C started");
-
-  if (lightSensor.begin())
+  while (WiFi.begin(ssid, password) != WL_CONNECTED)
   {
-    Serial.println("BH1750 sensor ready!");
-  }
-  else
-  {
-    Serial.println("BH1750 sensor failed!");
+    Serial.print(".");
+    delay(3000);
   }
 
-  connectWiFi();
-
-  connectMQTT();
-
   Serial.println();
-  Serial.println("System ready!");
+  Serial.println("Wi-Fi connected");
+
+  // MQTT setup
+  mqttClient.setServer(mqttServer, mqttPort);
+  mqttClient.setCallback(mqttCallback);
 }
 
+
+// ---------- Main loop ----------
 void loop()
 {
-  
   if (!mqttClient.connected())
   {
-    connectMQTT();
+    reconnectMQTT();
   }
 
-  mqttClient.poll();
+  mqttClient.loop();
 
-  float light = lightSensor.readLightLevel();
+  long distance = getDistance();
 
-  if (light < 0)
+  Serial.print("Distance: ");
+  Serial.print(distance);
+  Serial.println(" cm");
+
+  // -------- Wave detection --------
+  // Example definition:
+  // object/hand comes between 10 and 30 cm
+  if (distance >= 10 && distance <= 30)
   {
-    Serial.println("Light reading failed!");
+    Serial.println("WAVE DETECTED");
 
-    delay(5000);
+    mqttClient.publish("ES/Wave", myName);
 
-    return;
+    delay(2000);
   }
 
-  Serial.println();
-
-
-  Serial.print("Light: ");
-  Serial.print(light, 2);
-  Serial.println(" lux");
-
-  String message = "{";
-
-  message += "\"light\":";
-  message += String(light, 2);
-
-  message += "}";
-
-  Serial.print("MQTT message: ");
-  Serial.println(message);
-
-  mqttClient.beginMessage(mqttTopic);
-
-  mqttClient.print(message);
-
-  mqttClient.endMessage();
-
-
-  Serial.println("Data sent to HiveMQ!");
-
-  for (int i = 0; i < 30; i++)
+  // -------- Pat detection --------
+  // Example definition:
+  // very close object/hand
+  if (distance > 0 && distance < 10)
   {
-    mqttClient.poll();
-    delay(1000);
+    Serial.println("PAT DETECTED");
+
+    mqttClient.publish("ES/Pat", myName);
+
+    delay(2000);
   }
+
+  delay(100);
 }
 
 
