@@ -1,0 +1,158 @@
+#include <Wire.h>
+#include <BH1750.h>
+
+// Output pins
+const byte LED1 = 2;
+const byte LED2 = 4;
+
+// Interrupt input pins
+const byte BUTTON = 9;
+const byte PIR = 10;
+
+// Light threshold
+const float DARK_LEVEL = 50.0;
+
+BH1750 sensor;
+
+// Interrupt event counters
+volatile unsigned int buttonCount = 0;
+volatile unsigned int motionCount = 0;
+
+bool lightsState = false;
+
+
+// Button interrupt
+void buttonInterrupt() {
+  buttonCount++;
+}
+
+
+// PIR interrupt
+void motionInterrupt() {
+  motionCount++;
+}
+
+
+// Control both LEDs
+void controlLights(bool state) {
+  lightsState = state;
+
+  digitalWrite(LED1, state);
+  digitalWrite(LED2, state);
+}
+
+
+// Check the light level after motion
+void handleMotion() {
+
+  float lux = sensor.readLightLevel();
+
+  Serial.print("Current light: ");
+  Serial.print(lux);
+  Serial.println(" lux");
+
+  if (lux < DARK_LEVEL) {
+    controlLights(true);
+    Serial.println("Dark - Lights ON");
+  }
+  else {
+    controlLights(false);
+    Serial.println("Bright - Lights OFF");
+  }
+}
+
+
+void setup() {
+
+  Serial.begin(9600);
+
+  // Configure LEDs
+  pinMode(LED1, OUTPUT);
+  pinMode(LED2, OUTPUT);
+
+  // Configure inputs
+  pinMode(BUTTON, INPUT_PULLUP);
+  pinMode(PIR, INPUT);
+
+  // Initially switch LEDs off
+  controlLights(false);
+
+  // Start I2C
+  Wire.begin();
+
+  // Start BH1750
+  if (sensor.begin()) {
+    Serial.println("BH1750 READY");
+  }
+  else {
+    Serial.println("BH1750 ERROR");
+  }
+
+  // Allow PIR to stabilise
+  delay(30000);
+
+  // Configure interrupts
+  attachInterrupt(
+    digitalPinToInterrupt(BUTTON),
+    buttonInterrupt,
+    FALLING
+  );
+
+  attachInterrupt(
+    digitalPinToInterrupt(PIR),
+    motionInterrupt,
+    RISING
+  );
+
+  Serial.println("TASK 4.1P READY");
+  Serial.println("Button interrupt: D9");
+  Serial.println("PIR interrupt: D10");
+
+}
+
+
+void loop() {
+
+  // Check for a button interrupt
+  if (buttonCount > 0) {
+
+    noInterrupts();
+    buttonCount--;
+    interrupts();
+
+    delay(50);
+
+    // Make sure the button is actually pressed
+    if (digitalRead(BUTTON) == LOW) {
+
+      controlLights(!lightsState);
+
+      Serial.println("BUTTON INTERRUPT DETECTED");
+
+      if (lightsState) {
+        Serial.println("Manual control - Lights ON");
+      }
+      else {
+        Serial.println("Manual control - Lights OFF");
+      }
+
+      // Wait for button release
+      while (digitalRead(BUTTON) == LOW) {
+        delay(5);
+      }
+    }
+  }
+
+
+  // Check for a PIR interrupt
+  if (motionCount > 0) {
+
+    noInterrupts();
+    motionCount--;
+    interrupts();
+
+    Serial.println("PIR INTERRUPT DETECTED");
+
+    handleMotion();
+  }
+}
